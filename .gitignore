@@ -1,0 +1,11 @@
+# https://github.com/github/gitignore/blob/main/Python.gitignore
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+
+# Unit test / coverage reports
+.pytest_cache/
+
+# data
+data/summlink-ami/
+data/summlink-icsi/
