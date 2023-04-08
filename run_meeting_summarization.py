@@ -54,21 +54,25 @@ def parse_args():
                         help='seed of the experimnet')
     parser.add_argument('--dataset-name-or-path-1', type=str, default="./data/meeting_summary_ami.json")
     parser.add_argument('--dataset-name-or-path-2', type=str, default="./data/meeting_summary_icsi.json")
-    parser.add_argument('--model-name-or-path', type=str, default="bigscience/bloomz-560m")
+    parser.add_argument('--model-name-or-path', type=str, default="bigscience/bloomz-3b")
     parser.add_argument('--output-dir', type=str, default="outputs")
     parser.add_argument('--task-prompt', type=str, default=" TL;DR: ")
     parser.add_argument('--num-virtual-tokens', type=int, default=100)
     parser.add_argument('--prompt-init-text', type=str, default="Summarize the text: ")
-    parser.add_argument('--num-epochs', type=int, default=1)
-    parser.add_argument('--batch-size', type=int, default=1)
-    parser.add_argument('--max-length', type=int, default=924)
+    parser.add_argument('--lora-rank', type=int, default=16)
+    parser.add_argument('--lora-alpha', type=int, default=16)
+    parser.add_argument('--lora-dropout', type=int, default=0.1)
+    parser.add_argument('--num-epochs', type=int, default=30)
+    parser.add_argument('--batch-size', type=int, default=2)
+    # while using prompt-tuning, remenber to deduct the num_virtual_tokens
+    parser.add_argument('--max-length', type=int, default=1024) 
     parser.add_argument('--lr', type=int, default=3e-5)
     parser.add_argument('--weight-decay', type=int, default=0.02)
-    parser.add_argument('--scheduler-name', type=str, default="linear")
-    parser.add_argument('--num-warmup-steps', type=int, default=0)
+    parser.add_argument('--scheduler-name', type=str, default="cosine")
+    parser.add_argument('--num-warmup-steps', type=int, default=3500)
     parser.add_argument('--gradient-accumulation-steps', type=int, default=1)
-    parser.add_argument('--print-train-every-n-steps', type=int, default=10)
-    parser.add_argument('--eval-steps', type=int, default=200)
+    parser.add_argument('--print-train-every-n-steps', type=int, default=25)
+    parser.add_argument('--eval-steps', type=int, default=165)
 
     # to add weight and bias, we set
     parser.add_argument('--track', type=lambda x:bool(strtobool(x)), default=False, nargs='?', const=True,
@@ -165,6 +169,11 @@ def eval_fn(data_loader):
         perplexity = torch.exp(avg_loss)
     except OverflowError:
         perplexity = float("inf")
+
+    # if args.track:
+    #     wandb.log({f"Validation Loss (per n steps)": avg_loss.item(),
+    #                f"Validation Perplexity (per n steps)": perplexity.item(),
+    #                })
         
     return avg_loss.item(), perplexity.item()
 
@@ -180,6 +189,9 @@ if __name__ == "__main__":
     task_prompt = args.task_prompt
     num_virtual_tokens = args.num_virtual_tokens
     prompt_init_text = args.prompt_init_text
+    lora_rank = args.lora_rank
+    lora_alpha = args.lora_alpha
+    lora_dropout = args.lora_dropout
     num_epochs = args.num_epochs
     batch_size = args.batch_size
     max_length = args.max_length
@@ -199,13 +211,21 @@ if __name__ == "__main__":
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    peft_config = PromptTuningConfig(
-    task_type=TaskType.CAUSAL_LM,
-    prompt_tuning_init=PromptTuningInit.TEXT,
-    num_virtual_tokens=num_virtual_tokens,
-    prompt_tuning_init_text=prompt_init_text,
-    tokenizer_name_or_path=model_name_or_path,
-    )
+    # peft_config = PromptTuningConfig(
+    #     task_type=TaskType.CAUSAL_LM,
+    #     prompt_tuning_init=PromptTuningInit.TEXT,
+    #     num_virtual_tokens=num_virtual_tokens,
+    #     prompt_tuning_init_text=prompt_init_text,
+    #     tokenizer_name_or_path=model_name_or_path,
+    # )
+
+    peft_config = LoraConfig(
+        task_type=TaskType.CAUSAL_LM, 
+        inference_mode=False, 
+        r=lora_rank, 
+        lora_alpha=lora_alpha, 
+        lora_dropout=lora_dropout
+        )
 
     # output_dir = f"{model_name_or_path.split('/')[-1]}_{peft_config.peft_type}"
     peft_model_id = f"{model_name_or_path.split('/')[-1]}_{peft_config.peft_type}_{peft_config.task_type}"
@@ -257,36 +277,30 @@ if __name__ == "__main__":
     # After filtered out, tokenize with padding and truncation
     tknz_dataset = filterd_no_padding_ds.map(tokenize, batched=True,
                                              remove_columns=["id", "text", "summary", "split", "source"])
-    
-    # tknz_dataset["train"]["input_ids"][0]
-    # sorted([len(i) for i in tknz_dataset["train"]["input_ids"]])
-    # sorted([len(i) for i in tknz_dataset["valid"]["input_ids"]])
-    # sorted([len(i) for i in tknz_dataset["test"]["input_ids"]])
 
     ## 1-5. Filter out the example with too long `source`
     # filterd_dataset = tknz_dataset.filter(lambda x: len(x["input_ids"]) <= max_length)
-    # sorted([len(filterd_Dataset["train"][i]["input_ids"]) for i in range(len(filterd_Dataset["train"]))])
     
     ## 2. Create DataLoader
     data_collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
 
-    train_dataloader = DataLoader(tknz_dataset["train"], 
+    train_dataloader = DataLoader(tknz_dataset["train"],
                                   collate_fn=data_collator,
-                                  batch_size=batch_size,
+                                  batch_size=batch_size, 
                                   shuffle=True)
-    eval_dataloader = DataLoader(tknz_dataset["valid"],
+    eval_dataloader = DataLoader(tknz_dataset["valid"], 
                                  collate_fn=data_collator,
                                  batch_size=batch_size)
-    test_dataloader = DataLoader(tknz_dataset["test"],
+    test_dataloader = DataLoader(tknz_dataset["test"], 
                                  collate_fn=data_collator,
                                  batch_size=batch_size)
     
     ## 3. Load the pre-trained model
     model = AutoModelForCausalLM.from_pretrained(
         model_name_or_path,
-        torch_dtype=torch.float16
-    #     load_in_8bit=True, 
-    #     device_map='auto',
+        # torch_dtype=torch.float16
+        # load_in_8bit=True, 
+        # device_map='auto',
         )
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
@@ -349,7 +363,7 @@ if __name__ == "__main__":
                                 f"loss/train: {loss.item():.4f}"
                                 )
             if args.track:
-                wandb.log({f"loss": loss.item(),
+                wandb.log({f"train_loss": loss.item(),
                         f"lr": lr_scheduler.get_last_lr()[0]})
             loss = loss / gradient_accumulation_steps
             accelerator.backward(loss)
@@ -371,13 +385,13 @@ if __name__ == "__main__":
             f"avg_eval_loss={eval_loss:.4f} | eval_ppl={eval_ppl:.4f}")
         if args.track:
                 wandb.log({f"epoch": epoch+1, 
-                        f"avg_train_loss": avg_train_loss,
-                        f"train_perplexity": train_ppl,
-                        f"avg_eval_loss": eval_loss,
-                        f"eval_perplexity": eval_ppl,
+                        f"Avg. Training Loss": avg_train_loss,
+                        f"Train Perplexity (per epoch)": train_ppl,
+                        f"Avg. Validation Loss": eval_loss,
+                        f"Validation Perplexity (per epoch)": eval_ppl,
                         })
     #     model.save_pretrained(os.path.join(output_dir, peft_model_id))
-    #     model.save_pretrained(peft_model_id)
+    #     model.save_pretrained(f"{peft_model_id}_2")
         
         accelerator.wait_for_everyone()
         unwrapped_model = accelerator.unwrap_model(model)
