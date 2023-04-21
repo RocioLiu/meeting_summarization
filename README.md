@@ -1,5 +1,5 @@
 # meeting_summarization
-Parameter-efficient fine-tuning with [prompt-tuning](https://arxiv.org/abs/2104.08691) tuned [bigscience/bloomz-3b](https://huggingface.co/bigscience/bloomz-3b) on meeting transcripts summarization.
+Parameter-efficient fine-tuning ( [prompt-tuning](https://arxiv.org/abs/2104.08691) ) [bigscience/bloomz-3b](https://huggingface.co/bigscience/bloomz-3b) for meeting transcripts summarization.
 
 ## Quickstart
 ### Prerequisites
