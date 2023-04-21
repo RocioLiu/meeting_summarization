@@ -17,7 +17,7 @@ Parameter-efficient fine-tune with [prompt-tuning](https://arxiv.org/abs/2104.08
 
 ### Data preprocess
 * Download AMI and ICSI meetning transcripts dataset from https://github.com/guokan-shang/ami-and-icsi-corpora 
-* run 
+* run the following command from data preprocessing
 ```bash
 python data_preprocess.py
 ```
