@@ -9,13 +9,13 @@ Parameter-efficient fine-tune with [prompt-tuning](https://arxiv.org/abs/2104.08
 
 #### conda option
 * Create a python virtual environment 
-* `conda create --name venv python=3.7`
+* `conda create --name venv python=3.9`
 * Source `conda activate venv`
 
 ### Installing
 * Install required python package `pip install -r requirements.txt`
 
-### Training
+### Data preprocess
 * Download AMI and ICSI meetning transcripts dataset from https://github.com/guokan-shang/ami-and-icsi-corpora 
 * run 
 ```bash
@@ -23,6 +23,7 @@ python data_preprocess.py
 ```
 * Place the generated data files in `data` folder.
 
+### Training
 * Run the following command for model training
 ```bash
 python run_meeting_summarization.py
