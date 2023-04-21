@@ -20,6 +20,7 @@ id2role = {"PM": "project manager",
            "Undergrad": "undergraduate student",
            }
 
+# data cleaning with removing `<>` and redundancy
 pattern_list = [r"\<[A-Za-z0-9_]+\>"]
 words_remove_list = ["Mm", "mm", "um", "Um", "un", "Un", "uh", "Uh", "hmm"]
 
