@@ -2,6 +2,7 @@
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
+.vscode/
 
 # Unit test / coverage reports
 .pytest_cache/
@@ -9,3 +10,10 @@ __pycache__/
 # data
 data/summlink-ami/
 data/summlink-icsi/
+data/rm_raw_ami/
+data/rm_raw_icsi/
+data/meeting_summary_rm_ami.json
+data/meeting_summary_comparisons.json
+
+# model checkpoints
+outputs/
