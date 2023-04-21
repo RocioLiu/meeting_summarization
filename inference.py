@@ -1,11 +1,15 @@
-from os.path import abspath, dirname, split, join, isfile
+from os.path import abspath, dirname, split, join
 import random
-
+import re
 
 import argparse
+from accelerate import Accelerator
 from datasets import Dataset, DatasetDict, concatenate_datasets, load_dataset
+import evaluate
+import nltk
 from torch.utils.data import DataLoader
 import torch
+import gc
 
 from transformers import (
     AutoConfig,
@@ -19,13 +23,15 @@ from transformers import (
 from peft import (
     get_peft_config,
     get_peft_model,
-    PeftModel,
-    PeftConfig,
+    PeftModel, #
+    PeftConfig, #
     PromptTuningInit,
     PromptTuningConfig,
     TaskType,
     PeftType,
 )
+
+nltk.download('punkt')
 
 device = ("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -38,35 +44,21 @@ def parse_args():
                         help='seed of the experimnet')
     parser.add_argument('--dataset-name-or-path-1', type=str, default="./data/meeting_summary_ami.json")
     parser.add_argument('--dataset-name-or-path-2', type=str, default="./data/meeting_summary_icsi.json")
-    parser.add_argument('--model-name-or-path', type=str, default="bigscience/bloomz-560m")
+    parser.add_argument('--model-name-or-path', type=str, default="bigscience/bloomz-3b")
+    parser.add_argument('--peft-model-name', type=str, default="bloomz-3b_PROMPT_TUNING_CAUSAL_LM_epoch20_202304182334")
     parser.add_argument('--output-dir', type=str, default="outputs")
     parser.add_argument('--task-prompt', type=str, default=" TL;DR: ")
     parser.add_argument('--num-virtual-tokens', type=int, default=100)
     parser.add_argument('--num-epochs', type=int, default=1)
     parser.add_argument('--batch-size', type=int, default=1)
-    parser.add_argument('--max-length', type=int, default=1948)
-    # parser.add_argument('--lr', type=int, default=3e-5)
-    # parser.add_argument('--weight-decay', type=int, default=0.02)
-    # parser.add_argument('--scheduler-name', type=str, default="linear")
-    # parser.add_argument('--num-warmup-steps', type=int, default=0)
-    # parser.add_argument('--gradient-accumulation-steps', type=int, default=1)
-    # parser.add_argument('--print-train-every-n-steps', type=int, default=10)
-    # parser.add_argument('--eval-steps', type=int, default=200)
-
-    # # to add weight and bias, we set
-    # parser.add_argument('--track', type=lambda x:bool(strtobool(x)), default=False, nargs='?', const=True,
-    #                     help='if toggled, this experiment will be tracked with Weights and Biases')
-    # parser.add_argument('--wandb-project-name', type=str, default="meeting-summarization",
-    #                     help="the wandb's project name")
-    # parser.add_argument('--wandb-entity', type=str, default=None,
-    #                     help="the entity (team) of wandb's project")
+    parser.add_argument('--max-length', type=int, default=924)
+    parser.add_argument('--uid', type=str, default="27-ES2003b")
     
     args = parser.parse_args()
     return args
 
 
 def set_seed(seed):
-    # Set seed for everything
     if seed is not None:
         random.seed(seed)
         torch.manual_seed(seed)
@@ -84,20 +76,79 @@ def dataset_split(dataset_ori: Dataset) -> DatasetDict:
     })
     return dataset_split
 
-def add_task_prompt_test(example):
+def add_task_prompt(example):
     example["source"] = example["text"] + task_prompt
     return example
 
 def tokenize(batch):
     return tokenizer(
         batch["source"], 
-        padding=True, 
+        padding='max_length', 
         truncation=True,
         max_length=max_length,
         return_tensors="pt"
-#         return_overflowing_tokens=True,
-#         return_length=True,
         )
+
+def calculate_model_size(model, model_name_or_path):
+    num_params = sum(t.numel() for t in model.parameters())
+    
+    param_size = 0
+    for param in model.parameters():
+        param_size += param.nelement() * param.element_size()
+        
+    buffer_size = 0
+    for buffer in model.buffers():
+        buffer_size += buffer.nelement() * buffer.element_size()
+
+    size_all_mb = (param_size + buffer_size) / 1024**2
+    
+    print(f"{model_name_or_path} size: {num_params/1000**2:.1f}M parameters")
+    print(f"model stored size: {size_all_mb:.3f}MB")
+
+
+def predict_one_sample(model, task_prompt, text=None, row_of_dataset=None, max_new_tokens=48, repetition_penalty=1.05):
+    if row_of_dataset:
+        text = row_of_dataset["source"][0]
+    inputs = tokenizer(text, padding='max_length', truncation=True, max_length=max_length, return_tensors="pt")
+    
+    model, inputs = accelerator.prepare(model, inputs)
+    model.eval()
+    with torch.cuda.amp.autocast():
+        with torch.no_grad():
+            inputs = {k: v.to(device) for k, v in inputs.items()}       
+            outputs = accelerator.unwrap_model(model).generate(**inputs, max_new_tokens=max_new_tokens, eos_token_id=tokenizer.eos_token_id, repetition_penalty=repetition_penalty)
+        
+        outputs = accelerator.gather(outputs).cpu().numpy()
+        output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        output_start = re.search(task_prompt, output_text).span()[1]
+        # find the last period "."
+        try:
+            output_end = re.search(task_prompt+r'(.*?)(.*)\.', output_text).span()[1]
+        except:
+            # if there's no period after task_prompt
+            output_end = len(output_text)
+
+        prediction = output_text[output_start:output_end]
+        reference = row_of_dataset['summary'][0]
+        print(f"\nuid: {row_of_dataset['uid'][0]}")
+        print(f"\nPredicted summary:\n{prediction}")
+        print(f"\nGround truth summary:\n{reference}")
+        
+        del outputs, inputs
+        gc.collect()
+
+    return [prediction], [reference]
+
+
+def postprocess_text(preds, labels):
+    preds = [pred.strip() for pred in preds]
+    labels = [label.strip() for label in labels]
+
+    # ROUGE expects a newline after each sentence
+    preds = ["\n".join(nltk.sent_tokenize(pred)) for pred in preds]
+    labels = ["\n".join(nltk.sent_tokenize(label)) for label in labels]
+
+    return preds, labels
 
 
 if __name__ == "__main__":
@@ -107,22 +158,16 @@ if __name__ == "__main__":
     dataset_name_or_path_1 = args.dataset_name_or_path_1
     dataset_name_or_path_2 = args.dataset_name_or_path_2
     model_name_or_path = args.model_name_or_path
+    peft_model_name = args.peft_model_name
     output_dir = args.output_dir
     task_prompt = args.task_prompt
     num_virtual_tokens = args.num_virtual_tokens
     num_epochs = args.num_epochs
     batch_size = args.batch_size
     max_length = args.max_length
+    uid = args.uid
 
     set_seed(seed)
-
-    peft_config = PromptTuningConfig(
-        task_type=TaskType.CAUSAL_LM,
-        prompt_tuning_init=PromptTuningInit.TEXT,
-        num_virtual_tokens=num_virtual_tokens,
-        prompt_tuning_init_text="TL;DR: ", ##
-        tokenizer_name_or_path=model_name_or_path,
-        )
 
     ## 1. Data preprocess
     ## 1-1. Import the preprocessed data, and then combine them
@@ -132,46 +177,53 @@ if __name__ == "__main__":
     meeting_dataset_ori = concatenate_datasets([dataset_ami_ori, dataset_icsi_ori])
 
     ## 1-2. Train / validation / test split based on featrue "split"
-    meeting_dataset = dataset_split(meeting_dataset_ori)
+    # meeting_dataset = dataset_split(meeting_dataset_ori)
+    # do not filter the data split now
+
 
     ## 1-3. Add task-specific prompt to concatenate text and summary at train and valid split
-    processed_test = meeting_dataset["test"].map(add_task_prompt_test)
+    processed_data = meeting_dataset_ori.map(add_task_prompt)
+    
 
     ## 1-4. Import model tokenizer and tokenize the dataset
-    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, padding_side='left')
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    tknz_test = processed_test.map(tokenize, batched=True,
-                                      remove_columns=["id", "text", "summary", "split", "source"])
-
     ## 1-5. Filter out the example with too long `source`
-    filterd_test = tknz_test.filter(lambda x: len(x["input_ids"]) <= max_length)
-
+    tknz_data = processed_data.map(tokenize, batched=True, remove_columns=["uid", "id", "text", "summary", "split", "source"])
+    filterd_data = tknz_data.filter(lambda x: len(x["input_ids"]) <= max_length)
 
     # creating model
-    from peft import PeftModel, PeftConfig
+    peft_model_id = f"{output_dir}/{peft_model_name}"
 
-    peft_model_id = f"{model_name_or_path.split('/')[-1]}_{peft_config.peft_type}_{peft_config.task_type}"
-    # peft_model_id = f"{model_name_or_path}_{peft_config.peft_type}_{peft_config.task_type}"
-
-    config = PeftConfig.from_pretrained(peft_model_id)
-    model = AutoModelForCausalLM.from_pretrained(config.base_model_name_or_path)
-    model = PeftModel.from_pretrained(model, peft_model_id)
-
-    i = 4
-    inputs = tokenizer(processed_test[i]["source"], return_tensors="pt")
-    print(processed_test[i]["source"])
-    print(processed_test[i]["summary"])
-
-    model.to(device)
-    model.eval()
-
-    with torch.no_grad():
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        outputs = model.generate(
-            input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=50, eos_token_id=3
+    peft_config = PeftConfig.from_pretrained(peft_model_id)
+    model = AutoModelForCausalLM.from_pretrained(
+        peft_config.base_model_name_or_path,
+        torch_dtype=torch.float16,
+        device_map="auto"
         )
-        # print(outputs)
-        # print(tokenizer.batch_decode(outputs.detach().cpu().numpy(), skip_special_tokens=True))
-        print(tokenizer.decode(outputs[0], skip_special_tokens=True))
+
+    model = PeftModel.from_pretrained(
+        model, 
+        peft_model_id, 
+        torch_dtype=torch.float16,
+        device_map="auto")
+    
+    model.print_trainable_parameters()
+    calculate_model_size(model, model_name_or_path)
+
+    accelerator = Accelerator()
+
+    
+    # inference
+    ROW_OF_DATASET = processed_data.filter(lambda x: x["uid"] == uid)
+    predictions, references = predict_one_sample(model, task_prompt, row_of_dataset=ROW_OF_DATASET, 
+                                                 max_new_tokens=50, repetition_penalty=1.06)
+    predictions, references = postprocess_text(predictions, references)
+
+    rouge_score = evaluate.load("rouge")
+    result = rouge_score.compute(predictions=predictions, references=references)
+    print(result)
+    
+    
