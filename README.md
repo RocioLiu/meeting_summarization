@@ -19,12 +19,12 @@ Parameter-efficient fine-tune with [prompt-tuning](https://arxiv.org/abs/2104.08
 * Download AMI and ICSI meetning transcripts dataset from https://github.com/guokan-shang/ami-and-icsi-corpora 
 * run the following command from data preprocessing
 ```bash
-python data_preprocess.py
+python src/data_preprocess.py
 ```
 * Place the generated data files in `data` folder.
 
 ### Training
 * Run the following command for model training
 ```bash
-python run_meeting_summarization.py
+python src/run_meeting_summarization.py
 ```
