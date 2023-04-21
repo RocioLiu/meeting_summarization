@@ -1,5 +1,4 @@
-import os
-from os.path import abspath, dirname, split, join, isdir, isfile, basename
+from os.path import abspath, dirname, split, join, basename
 import glob
 import json
 import re
@@ -26,21 +25,13 @@ words_remove_list = ["Mm", "mm", "um", "Um", "un", "Un", "uh", "Uh", "hmm"]
 
 # ami train / valid / test split by id
 ami_train = ['ES2002', 'ES2005', 'ES2006', 'ES2007', 'ES2008', 'ES2009', 'ES2010', 'ES2012', 'ES2013', 'ES2015', 'ES2016', 'IS1000', 'IS1001', 'IS1002', 'IS1003', 'IS1004', 'IS1005', 'IS1006', 'IS1007', 'TS3005', 'TS3008', 'TS3009', 'TS3010', 'TS3011', 'TS3012']
-# ami_validation = ['ES2003', 'ES2011', 'IS1008', 'TS3004', 'TS3006'] # original
-# ami_test = ['ES2004', 'ES2014', 'IS1009', 'TS3003', 'TS3007'] # original
-ami_validation = ['ES2011', 'IS1008']
-ami_test = ['TS3007']
+ami_validation = ['ES2003', 'ES2011', 'IS1008', 'TS3004', 'TS3006']
+ami_test = ['IS1009', 'TS3007']
 
 # icsi train / valid / test split by id
-# icsi_test = ['Bed004', 'Bed009', 'Bed016', 'Bmr005', 'Bmr019', 'Bro018'] # original
-icsi_validation = ['Bed004', 'Bmr019']
+icsi_validation = ['Bed004', 'Bed009', 'Bed016', 'Bmr019']
 icsi_test = ['Bmr005','Bro018']
 
-# list the id of too long transcript that I should get each paragraph summaries 
-# instead of the summaries of the whole transcript
-overlen_id = ['ES2002b', 'ES2002c', 'ES2002d', 'ES2003b', 'ES2003c', 'ES2003d', 'ES2004b', 'ES2004c', 'ES2004d', 'ES2005b', 'ES2005c', 'ES2006b', 'ES2006c', 'ES2006d', 'ES2008b', 'ES2008c', 'ES2008d', 'ES2009b', 'ES2009c', 'ES2009d', 'ES2012b', 'ES2012c', 'ES2013b', 'ES2013c', 'ES2013d', 'ES2014b', 'ES2014c', 'ES2014d', 'ES2015b', 'ES2015c', 'ES2015d', 'ES2016b', 'IS1000b', 'IS1000c', 'IS1000d', 'IS1002b', 'IS1002c', 'IS1002d', 'IS1003c', 'IS1003d', 'IS1004b', 'IS1004c', 'IS1004d', 'IS1006b', 'IS1006c', 'IS1007b', 'IS1007c', 'IS1007d', 'IS1009b', 'TS3003b', 'TS3003c', 'TS3003d', 'TS3004a', 'TS3004b', 'TS3004c', 'TS3004d', 'TS3005b', 'TS3005c', 'TS3005d', 'TS3006c', 'TS3006d', 'TS3008b', 'TS3008c', 'TS3008d', 'TS3009a', 'TS3010b', 'TS3010c', 'TS3010d', 'TS3011a','ES2011c', 'IS1008a', 'IS1008b', 'IS1008c', 'IS1008d','TS3007b', 'TS3007c', 'TS3007d']
-# ['ES2011c', 'IS1008a', 'IS1008b', 'IS1008c', 'IS1008d']
-# ['TS3007b', 'TS3007c', 'TS3007d']
 
 def regex_remove(text, pattern_list):
     for pattern in pattern_list:
@@ -48,19 +39,13 @@ def regex_remove(text, pattern_list):
     return text
 
 def multiple_word_remove(text, words_remove_list):
-    # words = word_tokenize(text)
     words = text.split(" ")
     text = ' '.join([word for word in words if word not in words_remove_list])
     return text
 
-# text = "Speaker <asde2>industrial designer: un hmm I think one factor <fitje> would be production cost ."
-# multiple_word_remove(text, words_remove_list)
-# text = "Speaker project manager: <vocalsound> well this is the un, kick-off meeting for um our our project ."
-
-
 def train_test_split_flag(transcript_id, valid_idx, test_idx):
     # if the last character of transcript_id is a lowercase letter, 
-    # remove it in order to match the splut index
+    # remove it in order to match the split index
     transcript_id = transcript_id[:-1] if bool(re.search(r"[a-z]", transcript_id[-1])) else transcript_id
     if transcript_id in valid_idx:
         data_split = "valid"
@@ -98,11 +83,11 @@ def get_transcript(row, transcript, corpus_name) -> str:
         if len(transcript) == 0:
             transcript += f"Speaker {role}: {text}"  
         elif j == 0:
-            transcript += f" Speaker {role}: {text}"      
+            transcript += f"\nSpeaker {role}: {text}"      
         elif role == previous_role:
-            transcript += f" {text}"
+            transcript += f". {text}" if not bool(re.search(r"\.", transcript[-1])) else f" {text}"
         else:
-            transcript += f" Speaker {role}: {text}"
+            transcript += f"\nSpeaker {role}: {text}"
         previous_role = role
 
     return transcript
@@ -122,54 +107,19 @@ def get_paragraph_transcript(row, corpus_name):
         if j == 0:
             transcript = f"Speaker {role}: {text}"      
         elif role == previous_role:
-            transcript += f" {text}"
+            transcript += f". {text}" if not bool(re.search(r"\.", transcript[-1])) else f" {text}"
         else:
-            transcript += f" Speaker {role}: {text}"
+            transcript += f"\nSpeaker {role}: {text}"
         previous_role = role
 
     return transcript
-
-
-# def preprocess_a_transcript(transcript_id, data: List, corpus_name):
-#     """
-#     params:
-#         data: a list of one raw summlink
-#     """
-#     summary = str()
-#     transcript = str()
-#     summary_list = []
-#     transcript_list = []
-#     # If a transcript is too long, then I'll just get each paragraph summaries 
-#     # instead of the summaries of the whole transcript
-#     if transcript_id in overlen_id:
-#         for i in range(len(data)):
-#             # each row is an ('abstractive', 'extractive') pair (i.e. a paragraph) of a summlink
-#             row = data[i]
-#             if row["abstractive"]["type"] == "abstract":
-#                 summary = get_paragraph_summary(row)
-#                 summary_list.append(summary)
-#                 transcript = get_paragraph_transcript(row, corpus_name)
-#                 transcript_list.append(transcript)
-#             else:
-#                 break
-#     else:
-#         for i in range(len(data)):
-#             row = data[i]
-#             # only get the section with "type" == "abstract". discard the section of "actions" and "decisions"
-#             if row["abstractive"]["type"] == "abstract":
-#                 summary = get_summary(row, summary)
-#                 transcript = get_transcript(row, transcript, corpus_name)
-#             else:
-#                 break
-#         summary_list.append(summary)
-#         transcript_list.append(transcript)
-#     return summary_list, transcript_list
-
 
 def preprocess_a_transcript(transcript_id, data: List, corpus_name):
     """
     params:
         data: a list of one raw summlink
+    return:
+        summary_list: a list of paragraph's summary
     """
     summary_list = []
     transcript_list = []
@@ -196,6 +146,7 @@ def create_summary_file(corpus_path, output_name, pattern_list, words_remove_lis
     file_path_list = [t for t in sorted(glob.glob(join(corpus_path, "*")))]
 
     data_list = []
+    global_count = 0
     for i in range(len(file_path_list)):
         # a file_path store the content of a transcript
         file_path = file_path_list[i]
@@ -207,9 +158,10 @@ def create_summary_file(corpus_path, output_name, pattern_list, words_remove_lis
         transcript_id = basename(file_path).split(".")[0]
         summary_list, transcript_list = preprocess_a_transcript(transcript_id, a_summlink, corpus_name)
         data_split = train_test_split_flag(transcript_id, valid_idx, test_idx)
-        for i in range(len(summary_list)):
-            data_list.append({"id": transcript_id, "text": transcript_list[i], 
-                         "summary": summary_list[i], "split": data_split})
+        for j in range(len(summary_list)):
+            global_count += 1
+            data_list.append({"uid": f"{global_count}-{transcript_id}", "id": transcript_id, "text": transcript_list[j], 
+                         "summary": summary_list[j], "split": data_split})
 
     # write the data to a json file
     with open(join(DATA_PATH, f"{output_name}_{corpus_name}.json"), "w", encoding="utf8") as fp:
@@ -217,7 +169,6 @@ def create_summary_file(corpus_path, output_name, pattern_list, words_remove_lis
 
 
 if __name__ == "__main__":
-    # corpus_paths = [f for f in glob.glob(join(DATA_PATH, "*")) if isdir(f)]
     create_summary_file(f"{DATA_PATH}/summlink-ami", "meeting_summary", pattern_list, words_remove_list, ami_validation, ami_test)
     create_summary_file(f"{DATA_PATH}/summlink-icsi", "meeting_summary", pattern_list, words_remove_list, icsi_validation, icsi_test)
 
